@@ -49,6 +49,8 @@ class SamAutomaticMaskGenerator:
         point_grids: Optional[List[np.ndarray]] = None,
         min_mask_region_area: int = 0,
         output_mode: str = "binary_mask",
+        only_whole_part: Optional[bool] = False,
+        part_mode: Optional[int] = None,
     ) -> None:
         """
         Using a SAM model, generates masks for the entire image.
@@ -132,6 +134,8 @@ class SamAutomaticMaskGenerator:
         self.crop_n_points_downscale_factor = crop_n_points_downscale_factor
         self.min_mask_region_area = min_mask_region_area
         self.output_mode = output_mode
+        self.only_whole_part = only_whole_part
+        self.part_mode = part_mode
 
     @torch.no_grad()
     def generate(self, image: np.ndarray) -> List[Dict[str, Any]]:
@@ -276,12 +280,21 @@ class SamAutomaticMaskGenerator:
         transformed_points = self.predictor.transform.apply_coords(points, im_size)
         in_points = torch.as_tensor(transformed_points, device=self.predictor.device)
         in_labels = torch.ones(in_points.shape[0], dtype=torch.int, device=in_points.device)
+
         masks, iou_preds, _ = self.predictor.predict_torch(
             in_points[:, None, :],
             in_labels[:, None],
             multimask_output=True,
             return_logits=True,
         )
+
+        # get the whole part segementation
+        if self.only_whole_part:
+            masks = masks[:,-1:]
+            iou_preds = iou_preds[:,-1:]
+        elif self.part_mode is not None:
+            masks = masks[:,self.part_mode:self.part_mode+1]
+            iou_preds = iou_preds[:,self.part_mode:self.part_mode+1] 
 
         # Serialize predictions and store in MaskData
         data = MaskData(
@@ -290,6 +303,7 @@ class SamAutomaticMaskGenerator:
             points=torch.as_tensor(points.repeat(masks.shape[1], axis=0)),
         )
         del masks
+
 
         # Filter by predicted IoU
         if self.pred_iou_thresh > 0.0:
